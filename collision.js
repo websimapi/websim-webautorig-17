@@ -74,7 +74,8 @@ export class CollisionSystem {
         this.skeleton = skeleton;
         this.capsules = new Map();
         this.collisionPairs = [];
-        this.margin = 0.02; // Collision buffer
+        this.margin = 0.015; // Collision buffer, slightly reduced
+        this.correctionThreshold = 0.001; // Ignore tiny penetrations
 
         this.createCapsules(markers, modelInverseMatrix);
         this.defineCollisionPairs();
@@ -91,7 +92,7 @@ export class CollisionSystem {
 
         const definitions = [
             // Torso
-            { name: 'torso', start: 'hips', end: 'neck', radius: getMarker('left_hip').distanceTo(getMarker('right_hip')) / 2.5 },
+            { name: 'torso', start: 'hips', end: 'neck', radius: getMarker('left_hip').distanceTo(getMarker('right_hip')) / 2.2 },
             // Arms
             { name: 'l_upperarm', start: 'left_shoulder', end: 'left_elbow', radiusKey: 'left_shoulder' },
             { name: 'r_upperarm', start: 'right_shoulder', end: 'right_elbow', radiusKey: 'right_shoulder' },
@@ -138,6 +139,7 @@ export class CollisionSystem {
             ['l_upperarm', 'torso'], ['r_upperarm', 'torso'],
             ['l_forearm', 'torso'], ['r_forearm', 'torso'],
             ['l_thigh', 'torso'], ['r_thigh', 'torso'],
+            ['l_upperarm', 'r_upperarm'], // Prevent arms from crossing too much
             ['l_thigh', 'r_thigh'],
         ];
         for (const [nameA, nameB] of pairs) {
@@ -167,7 +169,7 @@ export class CollisionSystem {
 
     resolveCollision(capA, capB, distance, minDistance, pA, pB) {
         const penetration = minDistance - distance;
-        if (penetration <= 0) return;
+        if (penetration <= this.correctionThreshold) return;
 
         // Push limb (capA) away from torso/other limb (capB)
         const pushVector = pA.clone().sub(pB).normalize();
