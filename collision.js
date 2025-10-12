@@ -74,8 +74,7 @@ export class CollisionSystem {
         this.skeleton = skeleton;
         this.capsules = new Map();
         this.collisionPairs = [];
-        this.margin = 0.015; // Collision buffer, slightly reduced
-        this.correctionThreshold = 0.001; // Ignore tiny penetrations
+        this.margin = 0.02; // Collision buffer
 
         this.createCapsules(markers, modelInverseMatrix);
         this.defineCollisionPairs();
@@ -92,7 +91,7 @@ export class CollisionSystem {
 
         const definitions = [
             // Torso
-            { name: 'torso', start: 'hips', end: 'neck', radius: getMarker('left_hip').distanceTo(getMarker('right_hip')) / 2.2 },
+            { name: 'torso', start: 'hips', end: 'neck', radius: getMarker('left_hip').distanceTo(getMarker('right_hip')) / 2.5 },
             // Arms
             { name: 'l_upperarm', start: 'left_shoulder', end: 'left_elbow', radiusKey: 'left_shoulder' },
             { name: 'r_upperarm', start: 'right_shoulder', end: 'right_elbow', radiusKey: 'right_shoulder' },
@@ -139,7 +138,6 @@ export class CollisionSystem {
             ['l_upperarm', 'torso'], ['r_upperarm', 'torso'],
             ['l_forearm', 'torso'], ['r_forearm', 'torso'],
             ['l_thigh', 'torso'], ['r_thigh', 'torso'],
-            ['l_upperarm', 'r_upperarm'], // Prevent arms from crossing too much
             ['l_thigh', 'r_thigh'],
         ];
         for (const [nameA, nameB] of pairs) {
@@ -169,7 +167,7 @@ export class CollisionSystem {
 
     resolveCollision(capA, capB, distance, minDistance, pA, pB) {
         const penetration = minDistance - distance;
-        if (penetration <= this.correctionThreshold) return;
+        if (penetration <= 0) return;
 
         // Push limb (capA) away from torso/other limb (capB)
         const pushVector = pA.clone().sub(pB).normalize();
@@ -183,27 +181,32 @@ export class CollisionSystem {
         let rotationAxis = new THREE.Vector3().crossVectors(limbDir, pushVector).normalize();
 
         if (rotationAxis.lengthSq() < 0.001) {
-            // Fallback if vectors are parallel
-            rotationAxis = new THREE.Vector3(0, 1, 0);
+            // Fallback if vectors are parallel (e.g., arm pointing straight at torso)
+            rotationAxis.crossVectors(limbDir, new THREE.Vector3(0, 1, 0)).normalize();
+             if (rotationAxis.lengthSq() < 0.001) {
+                rotationAxis.set(1, 0, 0); // Absolute fallback
+            }
         }
 
         // Apply a small rotation. The amount is proportional to penetration.
-        // A factor of 0.1 makes it a soft, gradual correction.
-        const correctionAngle = (penetration / capA.radius) * 0.1;
+        // A smaller factor (e.g., 0.05) makes it a softer, more gradual correction.
+        const correctionAngle = (penetration / capA.radius) * 0.05;
 
         const correctionQuat = new THREE.Quaternion().setFromAxisAngle(rotationAxis, correctionAngle);
 
         // We need to apply this rotation in the bone's local space.
-        // Transform the world-space quaternion to local space.
-        const parentWorld = new THREE.Matrix4();
-        boneToAdjust.parent.updateWorldMatrix(true, false);
-        parentWorld.copy(boneToAdjust.parent.matrixWorld).invert();
+        // To do that, we convert the world-space correction quaternion to local space.
+        const parent = boneToAdjust.parent;
+        parent.updateWorldMatrix(true, false);
+        const parentWorldInverseQuat = new THREE.Quaternion().setFromRotationMatrix(parent.matrixWorld).invert();
 
-        const parentWorldQuat = new THREE.Quaternion().setFromRotationMatrix(parentWorld);
-
-        const localCorrectionQuat = correctionQuat.premultiply(parentWorldQuat).normalize();
+        // The formula to convert a world-space rotation to local space is:
+        // q_local = q_parent_world_inverse * q_world * q_parent_world
+        // However, we are PRE-multiplying this to the bone's current local quaternion.
+        // The effective local correction is simpler: parent_inverse * world_correction
+        const localCorrectionQuat = parentWorldInverseQuat.multiply(correctionQuat);
 
         boneToAdjust.quaternion.premultiply(localCorrectionQuat);
-        boneToAdjust.updateWorldMatrix(true, false);
+        boneToAdjust.updateWorldMatrix(true, false); // Update matrix for next collision check in same frame
     }
 }
